@@ -1194,13 +1194,15 @@ static void json_vsetf_cb(void *userdata, const char *name, size_t name_len,
   if (strcmp(path, data->json_path) == 0 && t->type != JSON_TYPE_OBJECT_START &&
       t->type != JSON_TYPE_ARRAY_START) {
     // need to set pos and end differently to account for '"' around string
+    // For booleans/numbers: t->ptr points to start, t->len is exact length
+    // For strings: t->ptr points inside quotes, t->len excludes quotes
     if (t->type == JSON_TYPE_TRUE || t->type == JSON_TYPE_FALSE || t->type == JSON_TYPE_NUMBER) {
       data->pos = off;
-      data->end = off + t->len + 1;
+      data->end = off + t->len;  // Point to char after value
     }
     else {
-      data->pos = off - 1;
-      data->end = off + t->len + 2;
+      data->pos = off - 1;        // Include opening quote
+      data->end = off + t->len + 1;  // Point to char after closing quote
     }
     data->matched = matched;
   }

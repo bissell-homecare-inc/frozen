@@ -1287,12 +1287,20 @@ int json_vsetf(const char *s, int len, struct json_out *out,
     /* Print the new value */
     json_vprintf(out, json_fmt, ap);
 
-    /* Close brackets/braces of the added missing keys */
-    for (; off > data.matched; off--) {
-      int ch = json_path[off];
-      const char *p = ch == '.' ? "}" : ch == '[' ? "]" : "";
-      json_printf(out, "%s", p);
-    }
+
+
+    /* Close brackets/braces of the added missing keys  ok
+        Only add closing when depth is non-zero.  This fixes a bug where calling json_vsetf 
+        on a shallow path (or an already-existing key) would
+        produce malformed JSON by inserting extra closing characters where none were needed.
+    */
+    if (depth > 0) {
+      for (; off > data.matched; off--) {
+        int ch = json_path[off];
+        const char *p = ch == '.' ? "}" : ch == '[' ? "]" : "";
+        json_printf(out, "%s", p);
+      }
+    }   
 
     /* Print the rest of the unchanged string */
     json_printf(out, "%.*s", len - data.end, s + data.end);

@@ -1195,18 +1195,35 @@ static void json_vsetf_cb(void *userdata, const char *name, size_t name_len,
   /* Exact path match. Set mutation position to the value of this token */
   if (strcmp(path, data->json_path) == 0 && t->type != JSON_TYPE_OBJECT_START &&
       t->type != JSON_TYPE_ARRAY_START) {
-    // need to set pos and end differently to account for '"' around string
-    // For booleans/numbers: t->ptr points to start, t->len is exact length
-    // For strings: t->ptr points inside quotes, t->len excludes quotes
-    if (t->type == JSON_TYPE_TRUE || t->type == JSON_TYPE_FALSE || t->type == JSON_TYPE_NUMBER) {
-      data->pos = off;
-      data->end = off + t->len;  // Point to char after value
+    /* Only JSON_TYPE_STRING needs the -1/+1 adjustment: its t->ptr points
+     * INSIDE the quotes and t->len excludes them.
+     *
+     * For every other type -- numbers, true/false/null, and OBJECT_END /
+     * ARRAY_END (whose token spans the entire container, braces/brackets
+     * included) -- t->ptr already points at the first byte of the value and
+     * t->len spans it exactly.
+     *
+     * The previous code applied the string adjustment to everything that was
+     * not a number/bool, so replacing an object- or array-valued key consumed
+     * the ':' before the value and one byte past its end, producing malformed
+     * JSON (e.g. {"errors":[..]} -> {"errors",[..]} with a lost '}'). */
+    if (t->type == JSON_TYPE_STRING) {
+      data->pos = off - 1;           /* include the opening quote */
+      data->end = off + t->len + 1;  /* just past the closing quote */
     }
     else {
-      data->pos = off - 1;        // Include opening quote
-      data->end = off + t->len + 1;  // Point to char after closing quote
+      data->pos = off;
+      data->end = off + t->len;      /* just past the value */
     }
-    data->matched = matched;
+    /* This is an exact match by definition, so record the full matched
+     * length. Do NOT use the local `matched` here: it is left at 0 whenever
+     * an earlier token already advanced data->matched to this same length,
+     * because the guard above is `len > data->matched`. That happens for an
+     * array of objects, whose element OBJECT_END shares the entire path
+     * prefix ("...errors[0]" vs "...errors"). Writing 0 back discarded the
+     * match, so the caller re-emitted the whole path as "missing keys" and
+     * produced malformed JSON. */
+    data->matched = len;
   }
 
   /*
@@ -1250,6 +1267,7 @@ int json_vsetf(const char *s, int len, struct json_out *out,
   } else {
     /* Modification codepath */
     int n, off = data.matched+1, depth = 0;
+    int path_len = (int) strlen(json_path);
     bool empty_base = false;
 
     // if a partial or exact match isn't found, adjust a few items
@@ -1269,8 +1287,14 @@ int json_vsetf(const char *s, int len, struct json_out *out,
     /* Print the unchanged beginning */
     json_printf(out, "%.*s", data.pos, s);
 
-    /* Add missing keys */
-    while ((n = strcspn(&json_path[off], ".[")) > 0) {
+    /* Add missing keys.
+     *
+     * Bound by path_len: on an exact full-path match data.matched ==
+     * strlen(json_path), so off indexes one PAST the terminating NUL. Reading
+     * there is out of bounds, and whatever followed in memory could make this
+     * loop emit a spurious separator and garbage keys into the output. An
+     * exact match has no missing keys to add, so the loop must not run. */
+    while (off < path_len && (n = strcspn(&json_path[off], ".[")) > 0) {
       // don't add a comma if it is a completely empty base
       if (s[data.prev - 1] != '{' && s[data.prev - 1] != '[' && depth == 0 && !empty_base) {
         json_printf(out, ",");
